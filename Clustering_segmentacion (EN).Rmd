@@ -1,0 +1,436 @@
+---
+title: "Clustering"
+author: "Roberto Baca"
+date: "01/08/2025"
+output: 
+  prettydoc::html_pretty:
+          theme: hpstr
+---
+
+# Clustering
+
+This project focuses on unsupervised learning techniques, specifically clustering, which aims to group similar observations without the use of labels (i.e., no target variable is involved).
+
+Main types of clustering methods:
+
+* **Partition-based clustering**: groups observations based on similarity, typically using a distance metric. The most common algorithm is K-Means, which partitions the data into k clusters by minimizing intra-cluster variance.
+
+* **Hierarchical clustering (agglomerative)**: builds a tree-like structure (dendrogram) by iteratively merging the closest pairs of observations or clusters until all data points are grouped into a single cluster.
+
+* **Density-based clustering (DBSCAN)**: identifies clusters as areas of high point density, allowing the detection of noise and outliers. It does not require specifying the number of clusters in advance.
+
+
+## Partition-based Clustering with K-Means
+
+This method groups observations that are similar to each other and different from those in other groups, based on a distance measure (commonly Euclidean distance).
+
+In the context of customer segmentation, K-Means is frequently used in R to:
+
+* Discover common behavioral patterns.
+
+* Create distinct customer profiles.
+
+* Support personalized marketing strategies.
+
+The implementation in R typically involves functions such as kmeans() and visualization tools like fviz_cluster() from the factoextra package.
+
+
+```{r message=FALSE, warning=FALSE}
+# cargar librerias
+library(tidyverse)
+library(cluster)
+library(factoextra)
+library(plotly)
+library(dplyr)
+
+```
+
+We will use the *Mall_Customers* dataset to segment clients based on their characteristics, such as age, annual income, and spending score.
+
+This segmentation aims to identify distinct groups of customers with similar profiles, allowing for targeted marketing strategies and business insights.
+
+```{r}
+# load dataset
+df_mall <- read.csv('https://raw.githubusercontent.com/palasatenea66/DATASETS/main/Mall_Customers.csv')
+
+```
+
+```{r}
+# drop gender and customerID
+df_mall <- select(df_mall, -Gender, -CustomerID)
+
+# change column names
+colnames(df_mall) <- c("Age", "Income", "Score")
+
+head(df_mall)
+
+```
+
+```{r}
+str(df_mall)
+
+colnames(df_mall)
+```
+
+### Determining the Optimal Number of Clusters (k)
+
+Each of the following metrics helps evaluate the optimal number of clusters (k) for a K-Means clustering analysis.
+
+```{r message=FALSE}
+
+#install.packages("fpc")
+#install.packages("clusterCrit")
+library(knitr)
+
+metricas <- data.frame(Metric  = c("Silhouette ", "Elbow", "Calinski-Harabasz", "Davies-Bouldin"),
+                       Criterion  = c("Maximum value","Elbow point", "Maximum value","Minimum value"))
+kable(metricas, caption = "Optimal Number of Clusters (k)") 
+```
+
+### 1. Silhouette Coefficient
+
+The Silhouette Coefficient measures how well each point fits within its assigned cluster.
+It combines two aspects:
+
+* Cohesion: how close the point is to other points in the same cluster.
+
+* Separation: how far the point is from points in the nearest neighboring cluster.
+
+Values range from -1 to 1:
+
+* +1: the point is well clustered.
+
+* 0: the point lies between two clusters.
+
+* -1: the point is likely misclassified.
+
+A good clustering solution is characterized by:
+
+* High silhouette values (close to 1): indicate that observations are well matched to their own cluster.
+
+* Balanced cluster sizes: no cluster dominates or is underrepresented.
+
+* Few or no negative silhouette bars: suggests correct cluster assignment.
+
+* Few silhouettes near 0: points are clearly assigned and not on the border between clusters.
+
+```{r}
+library(fpc) 
+library(clusterCrit) 
+
+silhouette_scores <- c()
+
+# Transform data into a numeric matrix of type double
+data_matrix <- as.matrix(df_mall)
+storage.mode(data_matrix) <- "double"
+
+# Function to plot silhouette plots
+plot_silhouette_custom <- function(data, clusters, k) {
+  dist_matrix <- dist(data)
+  sil <- silhouette(clusters, dist_matrix)
+  sil_df <- as.data.frame(sil[, 1:3])
+  colnames(sil_df) <- c("cluster", "neighbor", "sil_width")
+  sil_df$cluster <- as.factor(sil_df$cluster)
+
+  # Add an index for sorting
+  sil_df <- sil_df %>%
+    arrange(cluster, -sil_width) %>%
+    mutate(index = row_number())
+
+  ggplot(sil_df, aes(x = index, y = sil_width, fill = cluster)) +
+    geom_bar(stat = "identity", width = 1, color = "black", show.legend = FALSE) +
+    geom_hline(aes(yintercept = mean(sil_width)), color = "red", linetype = "dashed") +
+    labs(title = paste("Silhouette Plot for k =", k),
+         x = "Points Ordered by Cluster",
+         y = "Silhouette Coefficient") +
+    scale_fill_manual(values = scales::hue_pal()(length(unique(sil_df$cluster)))) +
+    theme_minimal()
+}
+
+# Loop over different values of k
+for (k in 2:10) {
+  km <- kmeans(data_matrix, centers = k, nstart = 25)
+
+  # Calculate average silhouette score for each k
+  ss <- silhouette(km$cluster, dist(data_matrix))
+  avg_sil <- mean(ss[, 3])
+  cat(sprintf("For k = %d, the average silhouette coefficient is %.3f\n", k, avg_sil))
+  silhouette_scores <- c(silhouette_scores, avg_sil)
+
+  # Generate silhouette plots
+  print(plot_silhouette_custom(data_matrix, km$cluster, k))
+
+}
+
+```
+
+For each value of k, the average silhouette coefficient is computed.
+The optimal k is typically the one with the highest average silhouette score.
+
+Graphically:
+
+```{r}
+# Silhouette Coefficient vs k
+plot(2:10, silhouette_scores, type="b", pch=19, col="blue", xlab="Number of clusters", ylab="Silhouette Coefficient", main = "Silhouette Coefficient vs k")
+```
+
+### 2. Elbow Method (WCSS - Within-Cluster Sum of Squares)
+
+The Elbow Method evaluates how the within-cluster variance (or WCSS) decreases as the number of clusters (k) increases.
+
+It measures how tightly grouped the data points are within each cluster.
+The goal is to minimize WCSS, which indicates high cohesion within clusters.
+
+Graphically, a plot of WCSS vs. k is used. WCSS will always decrease as k increases, but the rate of decrease slows down.
+The "elbow point" is the value of k at which the curve starts to flatten—this is considered the optimal number of clusters.
+
+```{r}
+# Storing Evaluation Metrics
+wcss <- c()
+
+# Loop Over k Values
+for (k in 2:10) {
+  km <- kmeans(data_matrix, centers = k, nstart = 25)
+
+  # WCSS
+  wcss <- c(wcss, km$tot.withinss)
+}
+```
+
+```{r}
+# Elbow Method Visualization (WCSS)
+plot(2:10, wcss, type="b", pch=19, col="orange", xlab="Number of clusters", ylab="WCSS", main = "Elbow Method Visualization (WCSS)")
+```
+
+### 3. Calinski-Harabasz
+
+The Calinski-Harabasz Index measures the ratio of between-cluster dispersion to within-cluster dispersion.
+
+Its value is always positive, and higher values indicate better-defined clusters with greater separation between groups.
+
+The optimal number of clusters (k) is chosen as the one that maximizes this index.
+
+```{r}
+calinski <- c()
+
+#  Loop Over k Values
+for (k in 2:10) {
+  km <- kmeans(data_matrix, centers = k, nstart = 25)
+
+  # Calinski-Harabasz
+  calinski_val <- calinhara(data_matrix, km$cluster, k)
+  calinski <- c(calinski, calinski_val)
+
+}
+```
+
+
+```{r}
+# Visualization
+plot(2:10, calinski, type="b", pch=19, col="green", xlab="Number of clusters", ylab="Calinski-Harabasz Index", main = "Calinski-Harabasz")
+```
+
+
+### 4. Davies-Bouldin
+
+The Davies-Bouldin Index measures the ratio of the distance between clusters to the size (dispersion) of clusters.
+
+Lower values indicate better clustering performance, so the optimal number of clusters (k) is the one that minimizes this index.
+
+
+```{r}
+davies <- c()
+
+# Loop Over k Values
+for (k in 2:10) {
+  km <- kmeans(data_matrix, centers = k, nstart = 25)
+
+  # Davies-Bouldin
+  int_idx <- intCriteria(data_matrix, as.integer(km$cluster), c("Davies_Bouldin"))
+  davies <- c(davies, int_idx$davies_bouldin)
+
+}
+```
+
+
+```{r}
+# Visualization
+plot(2:10, davies, type="b", pch=19, col="purple", xlab="Número de clusters", ylab="Davies-Bouldin Index", main = "Davies-Bouldin")
+```
+
+### Partition-based Clustering with K-Means
+
+It is observed that the optimal number of clusters is k = 6.
+
+```{r}
+set.seed(42)
+
+km <- kmeans(df_mall, centers = 6, nstart = 100, iter.max = 1000)
+# nstart: Number of random initializations for the K-Means algorithm.
+# 1000: Maximum number of iterations allowed per run to ensure convergence.
+
+# Viewing Assigned Clusters
+print(km$cluster)
+
+# Add the cluster assignments to the original DataFrame.
+df_mall$cluster <- as.factor(km$cluster)
+```
+
+```{r}
+# Centroids
+centroides <- km$centers
+
+kable(centroides, caption = "Centroids")
+```
+
+```{r}
+#Display the first 10 rows of the DataFrame with cluster labels.
+head(df_mall, 10)
+```
+
+```{r}
+# Show the number of observations per cluster.
+kable(table(df_mall$cluster), caption = "Observations per Cluster — Partition-Based Clustering")
+
+```
+
+
+We can visualize the clustering results in a 3D plot, where the 6 clusters and their corresponding centroids are clearly identified.
+
+```{r}
+#Renaming Centroid Columns
+centroids <- as.data.frame(km$centers)
+colnames(centroids) <- c("Age", "Income", "Score")
+
+# 3D plot
+fig <- plot_ly(data = df_mall,
+               x = ~Age,
+               y = ~Income,
+               z = ~Score,
+               color = ~cluster,
+               colors = "Set1",
+               type = "scatter3d",
+               mode = "markers")
+
+# Adding Centroids Without Inheriting Previous Mappings
+fig <- fig %>% add_trace(x = centroids$Age,
+                         y = centroids$Income,
+                         z = centroids$Score,
+                         type = "scatter3d",
+                         mode = "markers",
+                         marker = list(size = 7, color = "black", symbol = "x"),
+                         name = "Centroids",
+                         inherit = FALSE)
+
+fig
+
+
+```
+
+## Hierarchical Clustering
+
+Hierarchical clustering builds a hierarchy of nested clusters. The most common approach is agglomerative clustering, which starts by treating each data point as an individual cluster and then iteratively merges clusters based on similarity criteria:
+
+* **Ward’s method**: minimizes the total within-cluster variance.
+
+* **Complete linkage**: merges clusters based on the maximum distance between points in different clusters.
+
+* **Single linkage**: merges clusters based on the minimum distance between points in different clusters.
+
+Graphically, the result is visualized using a dendrogram, which can be cut at a chosen height to obtain the desired number of clusters.
+
+```{r}
+# Calculating Distances and Hierarchical Clustering (Ward’s Method)
+d <- dist(df_mall, method="euclidean")
+
+hc <- hclust(d, method="ward.D2")
+
+# Cutting the Dendrogram into k = 6 Clusters
+grupos <- cutree(hc, k=6)
+kable(table(grupos), caption = "Observations per Cluster — Hierarchical Clustering")
+```
+
+```{r warning= FALSE, message=FALSE}
+library(ggplot2)
+
+# Dendrogram Visualization Highlighting k Clusters
+k_opt <- 6
+fviz_dend(
+  hc, k = k_opt, 
+  rect = TRUE,               # Rectangles around the 6 clusters to highlight them clearly.
+  show_labels = FALSE,       # Optionally hide row labels for clarity (e.g., labels = FALSE).
+  cex = 0.5,                 # Adjust text size if row labels are displayed (labels = TRUE).
+  main = "Dendrogram"
+)
+```
+
+
+## Density-Based Clustering (DBSCAN)
+
+DBSCAN assumes that each cluster is a region in space with a high density of points. For each cluster, points are classified as core points, border points, or noise points (outliers). Border points can belong to more than one cluster if they fall within the neighborhood of multiple core points.
+
+The advantage of DBSCAN is that it automatically detects the number of clusters without needing to specify k beforehand.
+
+However, two parameters must be defined, which can be challenging without prior knowledge:
+
+* **epsilon (ε)**: neighborhood radius. Larger values result in more points being grouped together.
+
+* **minPts**: minimum number of points required to form a core point. A common heuristic is to use log(n) where n is the number of observations.
+
+DBSCAN is very sensitive to the scale of the data, so it is recommended to normalize or standardize variables before applying the algorithm.
+
+```{r warning=FALSE, message=FALSE}
+#install.packages("dbscan")
+library(dbscan)
+
+# Data Scaling
+data_scale <- scale(df_mall[, c("Age", "Income", "Score")])
+
+# Apply DBSCAN
+
+modelo_db <- dbscan(data_scale, eps = 0.52, minPts = 4)
+
+
+modelo_db$cluster  # Cluster Labels for Each Point
+
+kable(table(modelo_db$cluster), caption = "Observations per Cluster — DBSCAN")
+```
+
+This method marks points with a cluster label of 0 as noise, which may correspond to outliers.
+
+Using eps = 0.52 and minPts = 4, 6 clusters were identified.
+
+```{r}
+# Cluster Plot
+plot(data_scale, col = modelo_db$cluster + 1L, pch = 19, main = "Clusters DBSCAN")
+```
+
+
+
+This is a simple scatter plot where:
+
+* Each point represents a customer (or observation).
+
+* Colors indicate the cluster assigned by DBSCAN.
+
+* Black points (cluster 0) represent noise points, i.e., points not assigned to any cluster.
+
+* The number of clusters is determined automatically by DBSCAN.
+
+
+```{r}
+library(factoextra)
+
+fviz_cluster(list(data = data_scale, cluster = modelo_db$cluster),
+             geom = "point",
+             palette = "jco",
+             main = "DBSCAN Clustering")
+```
+
+Display the points as in the previous scatter plot, but include:
+
+* Density ellipses around each cluster to visualize their spread and shape.
+
+* Cluster legend to identify each cluster by color.
+
+* Optionally, cluster centroids can be displayed for reference, although DBSCAN does not explicitly define cluster centers like K-Means.
